@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        run: pytest tests/test_data_loader.py tests/test_preprocessor.py -v --tb=short
+
+      - name: Run full training pipeline (smoke test)
+        run: python scripts/train_pipeline.py --n-trials 3
+
+      - name: Run API integration tests
+        run: pytest tests/test_api.py -v --tb=short
+
+      - name: Coverage report
+        run: pytest tests/ --cov=src --cov=api --cov-report=xml --ignore=tests/test_api.py -q || true

@@ -3,10 +3,14 @@
 FastAPI application for serving churn predictions.
 
 Endpoints:
-  GET  /health        — liveness check
-  GET  /metrics       — model metrics from last training run
-  POST /predict       — predict churn probability for a single customer
+  GET  /          — premium SPA frontend
+  GET  /health    — liveness check
+  GET  /metrics   — model metrics from last training run
+  GET  /results   — full leaderboard from last training run
+  POST /predict   — predict churn probability for a single customer
   POST /predict/batch — predict churn for a list of customers
+  GET  /audit-log — paginated inference history (SQLite)
+  DELETE /audit-log — clear inference history
 """
 
 from __future__ import annotations
@@ -15,10 +19,10 @@ import json
 import logging
 import sqlite3
 import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 import joblib
 import numpy as np
@@ -26,7 +30,9 @@ import pandas as pd
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +44,11 @@ THRESHOLD_PATH = MODELS_DIR / "best_threshold.pkl"
 METRICS_PATH = MODELS_DIR / "reports" / "metrics.json"
 RESULTS_PATH = MODELS_DIR / "results.json"
 DB_PATH = BASE_DIR / "data" / "inference_log.db"
-
 REPORTS_DIR = MODELS_DIR / "reports"
 
 # ── SQLite Inference Log ───────────────────────────────────────────────────────
 
-def _init_db():
+def _init_db() -> None:
     """Create the SQLite DB and inference_log table if they don't exist."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
@@ -73,17 +78,21 @@ def _init_db():
 
 @contextmanager
 def _get_db():
+    """Context manager that yields a SQLite connection and handles commit/rollback."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
-def _log_prediction(customer, response):
-    """Persist one inference record to the SQLite database."""
+def _log_prediction(customer, response) -> None:
+    """Persist one inference record to the SQLite database. Never raises."""
     try:
         with _get_db() as conn:
             conn.execute("""
@@ -114,14 +123,17 @@ def _log_prediction(customer, response):
     except Exception as exc:
         logger.warning("Failed to log prediction to DB: %s", exc)
 
+
 # ── Load artefacts at startup ─────────────────────────────────────────────────
+
 _pipeline = None
 _model = None
-_threshold = 0.5
+_threshold: float = 0.5
+_model_version: str = "unknown"
 
 
-def _load_artefacts():
-    global _pipeline, _model, _threshold
+def _load_artefacts() -> None:
+    global _pipeline, _model, _threshold, _model_version
     if not MODEL_PATH.exists():
         raise RuntimeError(
             f"Model not found at {MODEL_PATH}. "
@@ -131,10 +143,29 @@ def _load_artefacts():
     _model = joblib.load(MODEL_PATH)
     if THRESHOLD_PATH.exists():
         _threshold = float(joblib.load(THRESHOLD_PATH))
+    # Compute model version once at startup so stat() can't fail mid-request
+    try:
+        _model_version = str(int(MODEL_PATH.stat().st_mtime))
+    except OSError:
+        _model_version = "unknown"
     logger.info("Loaded model from %s (threshold=%.3f)", MODEL_PATH, _threshold)
 
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
+
+# Strict allowed values for categorical fields — unknown values are rejected
+# with a clear 422 validation error rather than silently encoded as "unknown".
+VALID_GENDER = {"Male", "Female"}
+VALID_YES_NO = {"Yes", "No"}
+VALID_YES_NO_NOPHONE = {"Yes", "No", "No phone service"}
+VALID_YES_NO_NOINET = {"Yes", "No", "No internet service"}
+VALID_INTERNET = {"DSL", "Fiber optic", "No"}
+VALID_CONTRACT = {"Month-to-month", "One year", "Two year"}
+VALID_PAYMENT = {
+    "Electronic check", "Mailed check",
+    "Bank transfer (automatic)", "Credit card (automatic)",
+}
+
 
 class CustomerFeatures(BaseModel):
     model_config = {"json_schema_extra": {"example": {
@@ -153,6 +184,7 @@ class CustomerFeatures(BaseModel):
     SeniorCitizen: int = Field(..., ge=0, le=1)
     Partner: str
     Dependents: str
+    # tenure 0 is valid (new customer); le=72 matches dataset max
     tenure: int = Field(..., ge=0, le=72)
     PhoneService: str
     MultipleLines: str
@@ -166,19 +198,70 @@ class CustomerFeatures(BaseModel):
     Contract: str
     PaperlessBilling: str
     PaymentMethod: str
-    MonthlyCharges: float = Field(..., ge=0)
-    TotalCharges: float = Field(..., ge=0)
+    MonthlyCharges: float = Field(..., ge=0, le=10_000)
+    TotalCharges: float = Field(..., ge=0, le=1_000_000)
+
+    # Strict enum validation for all categorical fields
+    @field_validator("gender")
+    @classmethod
+    def validate_gender(cls, v):
+        if v not in VALID_GENDER:
+            raise ValueError(f"gender must be one of {sorted(VALID_GENDER)}")
+        return v
+
+    @field_validator("Partner", "Dependents", "PhoneService", "PaperlessBilling")
+    @classmethod
+    def validate_yes_no(cls, v, info):
+        if v not in VALID_YES_NO:
+            raise ValueError(f"{info.field_name} must be one of {sorted(VALID_YES_NO)}")
+        return v
+
+    @field_validator("MultipleLines")
+    @classmethod
+    def validate_multiple_lines(cls, v):
+        if v not in VALID_YES_NO_NOPHONE:
+            raise ValueError(f"MultipleLines must be one of {sorted(VALID_YES_NO_NOPHONE)}")
+        return v
+
+    @field_validator("OnlineSecurity", "OnlineBackup", "DeviceProtection",
+                     "TechSupport", "StreamingTV", "StreamingMovies")
+    @classmethod
+    def validate_internet_addons(cls, v, info):
+        if v not in VALID_YES_NO_NOINET:
+            raise ValueError(f"{info.field_name} must be one of {sorted(VALID_YES_NO_NOINET)}")
+        return v
+
+    @field_validator("InternetService")
+    @classmethod
+    def validate_internet_service(cls, v):
+        if v not in VALID_INTERNET:
+            raise ValueError(f"InternetService must be one of {sorted(VALID_INTERNET)}")
+        return v
+
+    @field_validator("Contract")
+    @classmethod
+    def validate_contract(cls, v):
+        if v not in VALID_CONTRACT:
+            raise ValueError(f"Contract must be one of {sorted(VALID_CONTRACT)}")
+        return v
+
+    @field_validator("PaymentMethod")
+    @classmethod
+    def validate_payment_method(cls, v):
+        if v not in VALID_PAYMENT:
+            raise ValueError(f"PaymentMethod must be one of {sorted(VALID_PAYMENT)}")
+        return v
 
 
 class PredictionResponse(BaseModel):
     churn_probability: float
     will_churn: bool
-    confidence: str  # "high" | "medium" | "low"
+    confidence: Literal["high", "medium", "low"]
     model_version: str
 
 
 class BatchPredictionRequest(BaseModel):
-    customers: List[CustomerFeatures]
+    customers: List[CustomerFeatures] = Field(..., min_length=1, max_length=1000)
 
 
 class BatchPredictionResponse(BaseModel):
@@ -188,41 +271,37 @@ class BatchPredictionResponse(BaseModel):
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-from contextlib import asynccontextmanager
-
-
 @asynccontextmanager
-async def lifespan(app):
+async def lifespan(app: FastAPI):
     _load_artefacts()
     _init_db()
     yield
 
 
-
 app = FastAPI(
-    title="Churn Classifier API",
+    title="ChurnGuard AI — Inference API",
     description=(
         "Production-ready REST API for predicting customer churn. "
         "Uses the best model selected from Logistic Regression, "
         "Random Forest, XGBoost, and LightGBM via Optuna HPO."
     ),
-    version="1.0.0",
+    version="1.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
 )
 
+# CORS: open for local development. In production, restrict allow_origins
+# to your actual frontend domain (e.g. ["https://yourdomain.com"]).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type"],
 )
 
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+# ── Static files ──────────────────────────────────────────────────────────────
 
-# Serve the new premium frontend and static assets
 frontend_path = BASE_DIR / "frontend"
 if frontend_path.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_path)), name="static")
@@ -236,11 +315,10 @@ async def serve_frontend():
     index_file = frontend_path / "index.html"
     if index_file.exists():
         return FileResponse(str(index_file))
-    return {"message": "API is running, but frontend not found."}
+    return {"message": "API is running. Frontend not found — serve frontend/index.html."}
 
 
-
-
+# ── Feature engineering (mirrors src/preprocessor.py exactly) ─────────────────
 
 BINARY_MAP = {"Yes": 1, "No": 0, "No phone service": 0, "No internet service": 0}
 BINARY_COLS = [
@@ -258,12 +336,13 @@ def _prepare_for_pipeline(customer: CustomerFeatures) -> pd.DataFrame:
     """
     Convert a CustomerFeatures object into a DataFrame that matches
     exactly the columns the fitted ColumnTransformer expects.
+    tenure=0 is assigned the '0-1yr' bucket (new customers).
     """
     d = customer.model_dump()
 
-    # Engineered features
     charges_ratio = d["MonthlyCharges"] / (d["TotalCharges"] + 1e-9)
     tenure = d["tenure"]
+    # Mirrors preprocessor pd.cut(bins=[0,12,24,48,72]) — tenure=0 → "0-1yr"
     if tenure <= 12:
         tenure_bucket = "0-1yr"
     elif tenure <= 24:
@@ -272,27 +351,23 @@ def _prepare_for_pipeline(customer: CustomerFeatures) -> pd.DataFrame:
         tenure_bucket = "2-4yr"
     else:
         tenure_bucket = "4+yr"
+
     service_count = sum(1 for k in ADDON_SERVICES if d.get(k) == "Yes")
     is_month_to_month = int(d["Contract"] == "Month-to-month")
-
-    # Binary encode yes/no cols
     binary_encoded = {col: BINARY_MAP.get(d[col], 0) for col in BINARY_COLS}
     gender = int(d["gender"] == "Male")
 
     return pd.DataFrame([{
-        # Numeric cols (StandardScaler)
         "SeniorCitizen": d["SeniorCitizen"],
         "tenure": d["tenure"],
         "MonthlyCharges": d["MonthlyCharges"],
         "TotalCharges": d["TotalCharges"],
         "charges_ratio": charges_ratio,
-        # OHE cols
         "MultipleLines": d["MultipleLines"],
         "InternetService": d["InternetService"],
         "Contract": d["Contract"],
         "PaymentMethod": d["PaymentMethod"],
         "tenure_bucket": tenure_bucket,
-        # Passthrough (binary)
         "gender": gender,
         **binary_encoded,
         "service_count": service_count,
@@ -315,16 +390,18 @@ def _predict_single(customer: CustomerFeatures) -> PredictionResponse:
         churn_probability=round(prob, 4),
         will_churn=will_churn,
         confidence=confidence,
-        model_version=MODEL_PATH.stat().st_mtime.__str__()[:10],
+        model_version=_model_version,
     )
 
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["Health"])
 def health():
     """Liveness check. Returns 200 if the model is loaded."""
     if _model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
-    return {"status": "ok", "model_loaded": True}
+    return {"status": "ok", "model_loaded": True, "threshold": _threshold}
 
 
 @app.get("/metrics", tags=["Model"])
@@ -352,11 +429,14 @@ def predict(customer: CustomerFeatures):
         raise HTTPException(status_code=503, detail="Model not loaded")
     try:
         result = _predict_single(customer)
-        _log_prediction(customer, result)   # ← persist to SQLite
+        _log_prediction(customer, result)
         return result
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.exception("Prediction error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Prediction error")
+        # Do NOT leak internal error details (e.g. stack traces) to the client
+        raise HTTPException(status_code=500, detail="Internal prediction error. Check server logs.")
 
 
 @app.post("/predict/batch", response_model=BatchPredictionResponse, tags=["Prediction"])
@@ -364,16 +444,16 @@ def predict_batch(request: BatchPredictionRequest):
     """Predict churn for a batch of up to 1000 customers."""
     if _model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
-    if len(request.customers) > 1000:
-        raise HTTPException(status_code=400, detail="Batch size cannot exceed 1000")
     try:
         predictions = [_predict_single(c) for c in request.customers]
         for customer, result in zip(request.customers, predictions):
             _log_prediction(customer, result)
         return BatchPredictionResponse(predictions=predictions, count=len(predictions))
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.exception("Batch prediction error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.exception("Batch prediction error")
+        raise HTTPException(status_code=500, detail="Internal prediction error. Check server logs.")
 
 
 @app.get("/audit-log", tags=["Audit"])
@@ -386,38 +466,47 @@ def get_audit_log(
     Sorted newest-first.
     """
     if not DB_PATH.exists():
-        return {"records": [], "total": 0}
-    with _get_db() as conn:
-        total = conn.execute("SELECT COUNT(*) FROM inference_log").fetchone()[0]
-        rows = conn.execute(
-            """
-            SELECT id, timestamp, gender, senior_citizen, partner, dependents,
-                   tenure, internet_service, contract, payment_method,
-                   monthly_charges, total_charges,
-                   churn_probability, will_churn, confidence, model_version
-            FROM inference_log
-            ORDER BY timestamp DESC
-            LIMIT ? OFFSET ?
-            """,
-            (limit, offset),
-        ).fetchall()
-    return {
-        "records": [dict(r) for r in rows],
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
+        return {"records": [], "total": 0, "limit": limit, "offset": offset}
+    try:
+        with _get_db() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM inference_log").fetchone()[0]
+            rows = conn.execute(
+                """
+                SELECT id, timestamp, gender, senior_citizen, partner, dependents,
+                       tenure, internet_service, contract, payment_method,
+                       monthly_charges, total_charges,
+                       churn_probability, will_churn, confidence, model_version
+                FROM inference_log
+                ORDER BY timestamp DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+        return {
+            "records": [dict(r) for r in rows],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+    except Exception as exc:
+        logger.exception("Audit log read error")
+        raise HTTPException(status_code=500, detail="Could not read audit log.")
 
 
 @app.delete("/audit-log", tags=["Audit"])
 def clear_audit_log():
     """Clear all records from the inference audit log."""
     if not DB_PATH.exists():
-        return {"deleted": 0}
-    with _get_db() as conn:
-        count = conn.execute("SELECT COUNT(*) FROM inference_log").fetchone()[0]
-        conn.execute("DELETE FROM inference_log")
-    return {"deleted": count, "message": "Audit log cleared successfully."}
+        return {"deleted": 0, "message": "Log does not exist."}
+    try:
+        with _get_db() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM inference_log").fetchone()[0]
+            conn.execute("DELETE FROM inference_log")
+        logger.info("Audit log cleared: %d records deleted", count)
+        return {"deleted": count, "message": "Audit log cleared successfully."}
+    except Exception as exc:
+        logger.exception("Audit log clear error")
+        raise HTTPException(status_code=500, detail="Could not clear audit log.")
 
 
 if __name__ == "__main__":

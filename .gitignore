@@ -9,6 +9,7 @@ dist/
 build/
 .DS_Store
 data/telco_churn.csv
+data/inference_log.db
 models/*.pkl
 models/reports/*.png
 models/results.json
