@@ -137,6 +137,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+# Serve the new premium frontend
+frontend_path = BASE_DIR / "frontend"
+if frontend_path.exists():
+    app.mount("/static", StaticFiles(directory=str(frontend_path)), name="static")
+
+@app.get("/", include_in_schema=False)
+async def serve_frontend():
+    index_file = frontend_path / "index.html"
+    if index_file.exists():
+        return FileResponse(str(index_file))
+    return {"message": "API is running, but frontend not found."}
+
+
 
 
 

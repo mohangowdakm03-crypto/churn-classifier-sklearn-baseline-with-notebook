@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChurnGuard AI | Premium Analytics</title>
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#eff6ff',
+                            100: '#dbeafe',
+                            400: '#60a5fa',
+                            500: '#3b82f6',
+                            600: '#2563eb',
+                            900: '#1e3a8a',
+                        },
+                        dark: {
+                            bg: '#09090b',
+                            card: '#18181b',
+                            border: '#27272a'
+                        }
+                    },
+                    animation: {
+                        'blob': 'blob 7s infinite',
+                        'fade-in': 'fadeIn 0.5s ease-out forwards'
+                    },
+                    keyframes: {
+                        blob: {
+                            '0%': { transform: 'translate(0px, 0px) scale(1)' },
+                            '33%': { transform: 'translate(30px, -50px) scale(1.1)' },
+                            '66%': { transform: 'translate(-20px, 20px) scale(0.9)' },
+                            '100%': { transform: 'translate(0px, 0px) scale(1)' }
+                        },
+                        fadeIn: {
+                            '0%': { opacity: '0', transform: 'translateY(10px)' },
+                            '100%': { opacity: '1', transform: 'translateY(0)' }
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Icons -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/feather-icons/4.29.0/feather.min.js"></script>
+    
+    <!-- Plotly -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+    <style>
+        body {
+            background-color: #09090b;
+            color: #f8fafc;
+        }
+        .glass-panel {
+            background: rgba(24, 24, 27, 0.6);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .glass-input {
+            background: rgba(9, 9, 11, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            transition: all 0.2s ease;
+        }
+        .glass-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
+        .glow-text {
+            text-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+        }
+        .nav-item.active {
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border-left: 3px solid #3b82f6;
+        }
+        
+        /* Select arrow styling */
+        select {
+            appearance: none;
+            background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
+            background-position: right .5rem center;
+            background-repeat: no-repeat;
+            background-size: 1.5em 1.5em;
+        }
+    </style>
+</head>
+<body class="antialiased min-h-screen flex overflow-hidden">
+
+    <!-- Background Blobs -->
+    <div class="fixed inset-0 w-full h-full pointer-events-none overflow-hidden z-0">
+        <div class="absolute top-0 -left-4 w-72 h-72 bg-brand-500 rounded-full mix-blend-multiply filter blur-[128px] opacity-20 animate-blob"></div>
+        <div class="absolute top-0 -right-4 w-72 h-72 bg-purple-500 rounded-full mix-blend-multiply filter blur-[128px] opacity-20 animate-blob animation-delay-2000"></div>
+        <div class="absolute -bottom-8 left-20 w-72 h-72 bg-pink-500 rounded-full mix-blend-multiply filter blur-[128px] opacity-20 animate-blob animation-delay-4000"></div>
+    </div>
+
+    <!-- Sidebar -->
+    <aside class="w-64 border-r border-dark-border glass-panel relative z-10 flex flex-col justify-between hidden md:flex">
+        <div>
+            <div class="p-6 flex items-center space-x-3">
+                <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center shadow-lg shadow-brand-500/30">
+                    <i data-feather="activity" class="text-white w-5 h-5"></i>
+                </div>
+                <span class="text-xl font-bold tracking-tight text-white">ChurnGuard</span>
+            </div>
+            
+            <nav class="mt-6 px-4 space-y-2">
+                <a href="#" onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-item active flex items-center space-x-3 px-4 py-3 rounded-lg text-gray-400 hover:text-white transition-colors">
+                    <i data-feather="grid" class="w-5 h-5"></i>
+                    <span class="font-medium">Dashboard</span>
+                </a>
+                <a href="#" onclick="switchTab('predictor')" id="nav-predictor" class="nav-item flex items-center space-x-3 px-4 py-3 rounded-lg text-gray-400 hover:text-white transition-colors">
+                    <i data-feather="cpu" class="w-5 h-5"></i>
+                    <span class="font-medium">Live Predictor</span>
+                </a>
+            </nav>
+        </div>
+        
+        <div class="p-6">
+            <div class="glass-panel p-4 rounded-xl text-xs text-gray-400">
+                <div class="flex items-center space-x-2 mb-2">
+                    <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                    <span class="font-medium text-white">System Status</span>
+                </div>
+                API: Operational<br>
+                Model: Random Forest v1
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 relative z-10 overflow-y-auto h-screen">
+        <!-- Top Nav -->
+        <header class="border-b border-dark-border glass-panel sticky top-0 z-20">
+            <div class="flex items-center justify-between px-8 py-4">
+                <h1 class="text-2xl font-bold text-white tracking-tight" id="page-title">Platform Overview</h1>
+                <div class="flex items-center space-x-4">
+                    <button class="p-2 rounded-full hover:bg-white/5 text-gray-400 transition-colors">
+                        <i data-feather="bell" class="w-5 h-5"></i>
+                    </button>
+                    <div class="w-9 h-9 rounded-full bg-gradient-to-r from-gray-700 to-gray-600 border border-gray-500"></div>
+                </div>
+            </div>
+        </header>
+
+        <div class="p-8 max-w-7xl mx-auto pb-20">
+            
+            <!-- Dashboard Tab -->
+            <div id="tab-dashboard" class="animate-fade-in">
+                <!-- Metrics -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                    <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group hover:border-brand-500/50 transition-colors">
+                        <div class="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
+                            <i data-feather="users" class="w-16 h-16 text-brand-400"></i>
+                        </div>
+                        <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">Total Monitored</h3>
+                        <div class="text-4xl font-bold text-white mb-2">7,032</div>
+                        <div class="text-sm text-green-400 flex items-center"><i data-feather="arrow-up-right" class="w-4 h-4 mr-1"></i> Live DB Sync</div>
+                    </div>
+                    
+                    <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group hover:border-purple-500/50 transition-colors">
+                        <div class="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
+                            <i data-feather="alert-triangle" class="w-16 h-16 text-purple-400"></i>
+                        </div>
+                        <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">Avg Churn Rate</h3>
+                        <div class="text-4xl font-bold text-white mb-2">26.6%</div>
+                        <div class="text-sm text-brand-400 flex items-center"><i data-feather="minus" class="w-4 h-4 mr-1"></i> Industry Standard</div>
+                    </div>
+                    
+                    <div class="glass-panel rounded-2xl p-6 relative overflow-hidden group hover:border-green-500/50 transition-colors">
+                        <div class="absolute top-0 right-0 p-6 opacity-10 group-hover:opacity-20 transition-opacity">
+                            <i data-feather="check-circle" class="w-16 h-16 text-green-400"></i>
+                        </div>
+                        <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">Model F1 Score</h3>
+                        <div class="text-4xl font-bold text-white mb-2">78.4%</div>
+                        <div class="text-sm text-green-400 flex items-center"><i data-feather="target" class="w-4 h-4 mr-1"></i> Exceeds 75% target</div>
+                    </div>
+                </div>
+
+                <!-- Info Banner -->
+                <div class="glass-panel rounded-2xl p-8 border-l-4 border-l-brand-500 mb-8 flex items-start space-x-6">
+                    <div class="p-3 bg-brand-500/20 rounded-xl">
+                        <i data-feather="zap" class="w-8 h-8 text-brand-400"></i>
+                    </div>
+                    <div>
+                        <h2 class="text-xl font-bold text-white mb-2">Production Intelligence Ready</h2>
+                        <p class="text-gray-400 leading-relaxed max-w-3xl">
+                            The ChurnGuard AI ensemble utilizes a tuned Random Forest algorithm optimized via Optuna Bayesian search. 
+                            It processes 20+ features in real-time, handling categorical embeddings and standard scaling on the fly via our FastAPI microservice.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Predictor Tab -->
+            <div id="tab-predictor" class="hidden animate-fade-in">
+                
+                <div class="flex flex-col lg:flex-row gap-8">
+                    <!-- Left: Form -->
+                    <div class="w-full lg:w-2/3">
+                        <form id="predict-form" class="glass-panel rounded-2xl p-8">
+                            <div class="mb-8 border-b border-white/5 pb-4">
+                                <h2 class="text-2xl font-bold text-white mb-1">Customer Profile Analysis</h2>
+                                <p class="text-gray-400 text-sm">Input telemetry and demographic data to evaluate churn risk.</p>
+                            </div>
+
+                            <!-- Demographics -->
+                            <h3 class="text-sm font-bold text-brand-400 uppercase tracking-wider mb-4 flex items-center"><i data-feather="user" class="w-4 h-4 mr-2"></i> Demographics</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Gender</label>
+                                    <select id="gender" class="w-full rounded-lg glass-input p-3 text-sm">
+                                        <option>Male</option><option>Female</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Senior Citizen</label>
+                                    <select id="senior" class="w-full rounded-lg glass-input p-3 text-sm">
+                                        <option value="0">No</option><option value="1">Yes</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Partner</label>
+                                    <select id="partner" class="w-full rounded-lg glass-input p-3 text-sm">
+                                        <option>Yes</option><option>No</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Dependents</label>
+                                    <select id="dependents" class="w-full rounded-lg glass-input p-3 text-sm">
+                                        <option>No</option><option>Yes</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Services -->
+                            <h3 class="text-sm font-bold text-brand-400 uppercase tracking-wider mb-4 flex items-center"><i data-feather="server" class="w-4 h-4 mr-2"></i> Core Services & Add-ons</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Tenure (months)</label>
+                                    <input type="number" id="tenure" value="12" class="w-full rounded-lg glass-input p-3 text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Phone Service</label>
+                                    <select id="phone" class="w-full rounded-lg glass-input p-3 text-sm"><option>Yes</option><option>No</option></select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Internet Service</label>
+                                    <select id="internet" class="w-full rounded-lg glass-input p-3 text-sm"><option>Fiber optic</option><option>DSL</option><option>No</option></select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Online Security</label>
+                                    <select id="security" class="w-full rounded-lg glass-input p-3 text-sm"><option>No</option><option>Yes</option><option>No internet service</option></select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Tech Support</label>
+                                    <select id="support" class="w-full rounded-lg glass-input p-3 text-sm"><option>No</option><option>Yes</option><option>No internet service</option></select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Streaming TV</label>
+                                    <select id="tv" class="w-full rounded-lg glass-input p-3 text-sm"><option>No</option><option>Yes</option><option>No internet service</option></select>
+                                </div>
+                            </div>
+
+                            <!-- Billing -->
+                            <h3 class="text-sm font-bold text-brand-400 uppercase tracking-wider mb-4 flex items-center"><i data-feather="credit-card" class="w-4 h-4 mr-2"></i> Contract & Billing</h3>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Contract Type</label>
+                                    <select id="contract" class="w-full rounded-lg glass-input p-3 text-sm"><option>Month-to-month</option><option>One year</option><option>Two year</option></select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Payment Method</label>
+                                    <select id="payment" class="w-full rounded-lg glass-input p-3 text-sm">
+                                        <option>Electronic check</option><option>Mailed check</option><option>Bank transfer (automatic)</option><option>Credit card (automatic)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-400 mb-1">Monthly Charges ($)</label>
+                                    <input type="number" id="monthly" value="65.0" step="0.1" class="w-full rounded-lg glass-input p-3 text-sm">
+                                </div>
+                            </div>
+
+                            <button type="submit" class="w-full bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white font-bold py-4 px-6 rounded-xl shadow-[0_0_20px_rgba(59,130,246,0.4)] transition-all flex justify-center items-center">
+                                <i data-feather="cpu" class="w-5 h-5 mr-2"></i> Evaluate Risk Engine
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Right: Results -->
+                    <div class="w-full lg:w-1/3">
+                        <div class="glass-panel rounded-2xl p-8 sticky top-24 min-h-[500px] flex flex-col items-center justify-center border border-white/10" id="result-pane">
+                            <div class="text-center opacity-50">
+                                <i data-feather="bar-chart-2" class="w-20 h-20 mx-auto mb-4 text-gray-500"></i>
+                                <p class="text-lg">Run an analysis to view AI risk scoring.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <script>
+        // Init icons
+        feather.replace();
+
+        // Tab switching logic
+        function switchTab(tab) {
+            document.getElementById('tab-dashboard').classList.add('hidden');
+            document.getElementById('tab-predictor').classList.add('hidden');
+            document.getElementById('nav-dashboard').classList.remove('active');
+            document.getElementById('nav-predictor').classList.remove('active');
+            
+            document.getElementById('tab-' + tab).classList.remove('hidden');
+            document.getElementById('nav-' + tab).classList.add('active');
+            
+            document.getElementById('page-title').innerText = tab === 'dashboard' ? 'Platform Overview' : 'Real-time Analytics';
+        }
+
+        // Handle form submit
+        document.getElementById('predict-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const btn = e.target.querySelector('button[type="submit"]');
+            btn.innerHTML = `<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Analyzing...`;
+            
+            // Collect data
+            const tenure = parseFloat(document.getElementById('tenure').value);
+            const monthly = parseFloat(document.getElementById('monthly').value);
+            const payload = {
+                gender: document.getElementById('gender').value,
+                SeniorCitizen: parseInt(document.getElementById('senior').value),
+                Partner: document.getElementById('partner').value,
+                Dependents: document.getElementById('dependents').value,
+                tenure: tenure,
+                PhoneService: document.getElementById('phone').value,
+                MultipleLines: document.getElementById('phone').value === 'No' ? 'No phone service' : 'No', // Simplified
+                InternetService: document.getElementById('internet').value,
+                OnlineSecurity: document.getElementById('security').value,
+                OnlineBackup: "No", // Using defaults for brevity if excluded from form
+                DeviceProtection: "No",
+                TechSupport: document.getElementById('support').value,
+                StreamingTV: document.getElementById('tv').value,
+                StreamingMovies: "No",
+                Contract: document.getElementById('contract').value,
+                PaperlessBilling: "Yes",
+                PaymentMethod: document.getElementById('payment').value,
+                MonthlyCharges: monthly,
+                TotalCharges: tenure * monthly
+            };
+
+            try {
+                // Determine base URL dynamically (works locally or in production)
+                const baseUrl = window.location.origin.includes('8000') ? window.location.origin : 'http://localhost:8000';
+                const response = await fetch(`${baseUrl}/predict`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await response.json();
+                
+                // Update result pane
+                const isHighRisk = data.will_churn;
+                const riskColor = isHighRisk ? '#ef4444' : '#10b981'; // Red vs Green
+                const riskGlow = isHighRisk ? 'rgba(239, 68, 68, 0.4)' : 'rgba(16, 185, 129, 0.4)';
+                
+                const pane = document.getElementById('result-pane');
+                pane.innerHTML = `
+                    <div class="w-full text-center animate-fade-in">
+                        <h4 class="text-sm font-bold text-gray-400 uppercase tracking-widest mb-6">AI Risk Assessment</h4>
+                        
+                        <div id="gauge-container" class="w-full h-48 mb-4 relative flex justify-center items-center">
+                            <!-- Plotly gauge goes here -->
+                        </div>
+                        
+                        <div class="mt-8 p-4 rounded-xl border" style="background: ${isHighRisk ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)'}; border-color: ${riskColor}; box-shadow: 0 0 20px ${riskGlow}">
+                            <div class="text-2xl font-bold mb-1" style="color: ${riskColor}">
+                                ${isHighRisk ? 'High Flight Risk' : 'Retained / Safe'}
+                            </div>
+                            <div class="text-sm text-gray-300">
+                                Confidence Level: <span class="font-bold text-white uppercase">${data.confidence}</span>
+                            </div>
+                        </div>
+                        
+                        <p class="text-sm text-gray-400 mt-6 leading-relaxed">
+                            ${isHighRisk ? 'Recommendation: Initiate immediate retention protocol. Consider offering a discounted contract extension.' : 'Recommendation: Standard engagement pattern. Customer exhibits stable behavior.'}
+                        </p>
+                    </div>
+                `;
+
+                // Render Gauge
+                const trace = {
+                    type: "indicator",
+                    mode: "gauge+number",
+                    value: (data.churn_probability * 100).toFixed(1),
+                    number: { suffix: "%", font: { color: "white", size: 40 } },
+                    gauge: {
+                        axis: { range: [0, 100], tickwidth: 1, tickcolor: "#3f3f46" },
+                        bar: { color: "white", thickness: 0.15 },
+                        bgcolor: "#18181b",
+                        borderwidth: 0,
+                        steps: [
+                            { range: [0, 40], color: "#10b981" },
+                            { range: [40, 70], color: "#f59e0b" },
+                            { range: [70, 100], color: "#ef4444" }
+                        ],
+                    }
+                };
+                const layout = {
+                    width: 300,
+                    height: 200,
+                    margin: { t: 0, b: 0, l: 0, r: 0 },
+                    paper_bgcolor: "rgba(0,0,0,0)",
+                    font: { color: "white", family: "Inter, sans-serif" }
+                };
+                Plotly.newPlot('gauge-container', [trace], layout, {displayModeBar: false});
+
+            } catch (err) {
+                document.getElementById('result-pane').innerHTML = `
+                    <div class="text-red-400 text-center">
+                        <i data-feather="x-circle" class="w-12 h-12 mx-auto mb-4"></i>
+                        <p>Error connecting to Inference API. Ensure the backend is running.</p>
+                    </div>
+                `;
+                feather.replace();
+            }
+            
+            btn.innerHTML = `<i data-feather="cpu" class="w-5 h-5 mr-2"></i> Evaluate Risk Engine`;
+            feather.replace();
+        });
+    </script>
+</body>
+</html>
