@@ -13,6 +13,10 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
+import uuid
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -20,7 +24,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -33,6 +37,82 @@ MODEL_PATH = MODELS_DIR / "best_model.pkl"
 THRESHOLD_PATH = MODELS_DIR / "best_threshold.pkl"
 METRICS_PATH = MODELS_DIR / "reports" / "metrics.json"
 RESULTS_PATH = MODELS_DIR / "results.json"
+DB_PATH = BASE_DIR / "data" / "inference_log.db"
+
+REPORTS_DIR = MODELS_DIR / "reports"
+
+# ── SQLite Inference Log ───────────────────────────────────────────────────────
+
+def _init_db():
+    """Create the SQLite DB and inference_log table if they don't exist."""
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS inference_log (
+                id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                gender TEXT,
+                senior_citizen INTEGER,
+                partner TEXT,
+                dependents TEXT,
+                tenure REAL,
+                internet_service TEXT,
+                contract TEXT,
+                payment_method TEXT,
+                monthly_charges REAL,
+                total_charges REAL,
+                churn_probability REAL,
+                will_churn INTEGER,
+                confidence TEXT,
+                model_version TEXT
+            )
+        """)
+        conn.commit()
+    logger.info("SQLite inference log initialised at %s", DB_PATH)
+
+
+@contextmanager
+def _get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _log_prediction(customer, response):
+    """Persist one inference record to the SQLite database."""
+    try:
+        with _get_db() as conn:
+            conn.execute("""
+                INSERT INTO inference_log VALUES (
+                    :id, :timestamp, :gender, :senior_citizen, :partner,
+                    :dependents, :tenure, :internet_service, :contract,
+                    :payment_method, :monthly_charges, :total_charges,
+                    :churn_probability, :will_churn, :confidence, :model_version
+                )
+            """, {
+                "id": str(uuid.uuid4()),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "gender": customer.gender,
+                "senior_citizen": customer.SeniorCitizen,
+                "partner": customer.Partner,
+                "dependents": customer.Dependents,
+                "tenure": customer.tenure,
+                "internet_service": customer.InternetService,
+                "contract": customer.Contract,
+                "payment_method": customer.PaymentMethod,
+                "monthly_charges": customer.MonthlyCharges,
+                "total_charges": customer.TotalCharges,
+                "churn_probability": response.churn_probability,
+                "will_churn": int(response.will_churn),
+                "confidence": response.confidence,
+                "model_version": response.model_version,
+            })
+    except Exception as exc:
+        logger.warning("Failed to log prediction to DB: %s", exc)
 
 # ── Load artefacts at startup ─────────────────────────────────────────────────
 _pipeline = None
@@ -114,7 +194,9 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app):
     _load_artefacts()
+    _init_db()
     yield
+
 
 
 app = FastAPI(
@@ -269,7 +351,9 @@ def predict(customer: CustomerFeatures):
     if _model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     try:
-        return _predict_single(customer)
+        result = _predict_single(customer)
+        _log_prediction(customer, result)   # ← persist to SQLite
+        return result
     except Exception as exc:
         logger.exception("Prediction error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
@@ -284,10 +368,56 @@ def predict_batch(request: BatchPredictionRequest):
         raise HTTPException(status_code=400, detail="Batch size cannot exceed 1000")
     try:
         predictions = [_predict_single(c) for c in request.customers]
+        for customer, result in zip(request.customers, predictions):
+            _log_prediction(customer, result)
         return BatchPredictionResponse(predictions=predictions, count=len(predictions))
     except Exception as exc:
         logger.exception("Batch prediction error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.get("/audit-log", tags=["Audit"])
+def get_audit_log(
+    limit: int = Query(50, ge=1, le=500, description="Max rows to return"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+):
+    """
+    Return paginated inference history from the SQLite audit log.
+    Sorted newest-first.
+    """
+    if not DB_PATH.exists():
+        return {"records": [], "total": 0}
+    with _get_db() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM inference_log").fetchone()[0]
+        rows = conn.execute(
+            """
+            SELECT id, timestamp, gender, senior_citizen, partner, dependents,
+                   tenure, internet_service, contract, payment_method,
+                   monthly_charges, total_charges,
+                   churn_probability, will_churn, confidence, model_version
+            FROM inference_log
+            ORDER BY timestamp DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        ).fetchall()
+    return {
+        "records": [dict(r) for r in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.delete("/audit-log", tags=["Audit"])
+def clear_audit_log():
+    """Clear all records from the inference audit log."""
+    if not DB_PATH.exists():
+        return {"deleted": 0}
+    with _get_db() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM inference_log").fetchone()[0]
+        conn.execute("DELETE FROM inference_log")
+    return {"deleted": count, "message": "Audit log cleared successfully."}
 
 
 if __name__ == "__main__":

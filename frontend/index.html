@@ -135,7 +135,13 @@
                     <i data-feather="cpu" class="w-5 h-5"></i>
                     <span class="font-medium">Live Predictor</span>
                 </a>
+                <a href="#" onclick="switchTab('auditlog')" id="nav-auditlog" class="nav-item flex items-center space-x-3 px-4 py-3 rounded-lg text-gray-400 hover:text-white transition-colors">
+                    <i data-feather="database" class="w-5 h-5"></i>
+                    <span class="font-medium">Audit Log</span>
+                    <span class="ml-auto text-xs bg-brand-500/20 text-brand-400 px-2 py-0.5 rounded-full" id="audit-badge">0</span>
+                </a>
             </nav>
+
         </div>
         
         <div class="p-6">
@@ -384,7 +390,73 @@
                 </div>
             </div>
 
+            <!-- Audit Log Tab -->
+            <div id="tab-auditlog" class="hidden animate-fade-in">
+                <div class="glass-panel rounded-2xl p-8">
+                    <div class="flex items-center justify-between mb-6">
+                        <div>
+                            <h2 class="text-2xl font-bold text-white mb-1">Inference Audit Log</h2>
+                            <p class="text-gray-400 text-sm">Every prediction is persisted to SQLite for monitoring and data drift analysis.</p>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <button onclick="fetchAuditLog()" class="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition text-gray-300" title="Refresh">
+                                <i data-feather="refresh-cw" class="w-5 h-5"></i>
+                            </button>
+                            <button onclick="clearAuditLog()" class="px-4 py-2 text-sm bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-lg transition flex items-center space-x-2">
+                                <i data-feather="trash-2" class="w-4 h-4 mr-1"></i> Clear Log
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Summary row -->
+                    <div class="grid grid-cols-3 gap-4 mb-8">
+                        <div class="glass-panel rounded-xl p-4 text-center">
+                            <div class="text-3xl font-bold text-white" id="audit-total">—</div>
+                            <div class="text-xs text-gray-400 mt-1 uppercase tracking-wider">Total Predictions</div>
+                        </div>
+                        <div class="glass-panel rounded-xl p-4 text-center">
+                            <div class="text-3xl font-bold text-red-400" id="audit-churn-count">—</div>
+                            <div class="text-xs text-gray-400 mt-1 uppercase tracking-wider">Churn Detected</div>
+                        </div>
+                        <div class="glass-panel rounded-xl p-4 text-center">
+                            <div class="text-3xl font-bold text-green-400" id="audit-safe-count">—</div>
+                            <div class="text-xs text-graygy-400 mt-1 uppercase tracking-wider text-gray-400">Safe / Retained</div>
+                        </div>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm text-gray-300">
+                            <thead class="text-xs uppercase bg-white/5 text-gray-400 border-b border-white/10">
+                                <tr>
+                                    <th class="px-4 py-3">Timestamp</th>
+                                    <th class="px-4 py-3">Gender</th>
+                                    <th class="px-4 py-3">Tenure</th>
+                                    <th class="px-4 py-3">Contract</th>
+                                    <th class="px-4 py-3">Monthly $</th>
+                                    <th class="px-4 py-3">Churn Prob</th>
+                                    <th class="px-4 py-3">Verdict</th>
+                                    <th class="px-4 py-3">Confidence</th>
+                                </tr>
+                            </thead>
+                            <tbody id="audit-table-body" class="divide-y divide-white/5">
+                                <tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">No predictions logged yet. Run the Live Predictor to see records appear here.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Pagination -->
+                    <div class="flex items-center justify-between mt-6 text-sm text-gray-400" id="audit-pagination">
+                        <span id="audit-page-info"></span>
+                        <div class="flex space-x-2">
+                            <button onclick="auditPage(-1)" class="px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg transition disabled:opacity-30" id="btn-prev">← Prev</button>
+                            <button onclick="auditPage(1)" class="px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg transition disabled:opacity-30" id="btn-next">Next →</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
         </div>
+
     </main>
 
     <script>
@@ -437,15 +509,88 @@
         // Load metrics on startup
         fetchMetrics();
 
+        // ── Audit Log ─────────────────────────────────────────────────────────
+        let _auditOffset = 0;
+        const _auditLimit = 25;
+        let _auditTotal = 0;
+
+        async function fetchAuditLog() {
+            try {
+                const res = await fetch(`${baseUrl}/audit-log?limit=${_auditLimit}&offset=${_auditOffset}`);
+                const data = await res.json();
+                _auditTotal = data.total;
+
+                // Update badges & summary
+                document.getElementById('audit-badge').innerText = data.total;
+                document.getElementById('audit-total').innerText = data.total;
+
+                const records = data.records || [];
+                const churnCount = records.filter(r => r.will_churn).length;
+                const safeCount = records.length - churnCount;
+                document.getElementById('audit-churn-count').innerText = churnCount;
+                document.getElementById('audit-safe-count').innerText = safeCount;
+
+                // Render rows
+                const tbody = document.getElementById('audit-table-body');
+                if (records.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="8" class="px-4 py-8 text-center text-gray-500">No predictions logged yet. Run the Live Predictor to see records appear here.</td></tr>';
+                    document.getElementById('audit-page-info').innerText = '';
+                    return;
+                }
+
+                tbody.innerHTML = '';
+                records.forEach(row => {
+                    const isChurn = row.will_churn === 1;
+                    const ts = new Date(row.timestamp).toLocaleString();
+                    const tr = document.createElement('tr');
+                    tr.className = 'hover:bg-white/5 transition-colors';
+                    tr.innerHTML = `
+                        <td class="px-4 py-3 text-xs text-gray-400 font-mono">${ts}</td>
+                        <td class="px-4 py-3">${row.gender}</td>
+                        <td class="px-4 py-3">${row.tenure}mo</td>
+                        <td class="px-4 py-3 text-xs">${row.contract}</td>
+                        <td class="px-4 py-3">$${row.monthly_charges.toFixed(0)}</td>
+                        <td class="px-4 py-3 font-mono">${(row.churn_probability * 100).toFixed(1)}%</td>
+                        <td class="px-4 py-3">
+                            <span class="px-2 py-1 rounded-full text-xs font-bold ${isChurn ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}">
+                                ${isChurn ? 'Churn' : 'Safe'}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 capitalize text-xs">${row.confidence}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+
+                // Pagination info
+                const start = _auditOffset + 1;
+                const end = Math.min(_auditOffset + _auditLimit, _auditTotal);
+                document.getElementById('audit-page-info').innerText = `Showing ${start}–${end} of ${_auditTotal} records`;
+                document.getElementById('btn-prev').disabled = _auditOffset === 0;
+                document.getElementById('btn-next').disabled = end >= _auditTotal;
+
+            } catch (err) {
+                console.error('Audit log fetch failed', err);
+            }
+        }
+
+        function auditPage(direction) {
+            _auditOffset = Math.max(0, _auditOffset + direction * _auditLimit);
+            fetchAuditLog();
+        }
+
+        async function clearAuditLog() {
+            if (!confirm('Clear all inference records from the audit log?')) return;
+            await fetch(`${baseUrl}/audit-log`, { method: 'DELETE' });
+            _auditOffset = 0;
+            fetchAuditLog();
+        }
+
         // Tab switching logic
         function switchTab(tab) {
-            document.getElementById('tab-dashboard').classList.add('hidden');
-            document.getElementById('tab-intelligence').classList.add('hidden');
-            document.getElementById('tab-predictor').classList.add('hidden');
-            
-            document.getElementById('nav-dashboard').classList.remove('active');
-            document.getElementById('nav-intelligence').classList.remove('active');
-            document.getElementById('nav-predictor').classList.remove('active');
+            ['dashboard','intelligence','predictor','auditlog'].forEach(t => {
+                document.getElementById('tab-' + t).classList.add('hidden');
+                document.getElementById('nav-' + t).classList.remove('active');
+            });
             
             document.getElementById('tab-' + tab).classList.remove('hidden');
             document.getElementById('nav-' + tab).classList.add('active');
@@ -453,9 +598,13 @@
             let titles = {
                 'dashboard': 'Platform Overview',
                 'intelligence': 'Model Intelligence & Explainability',
-                'predictor': 'Real-time Analytics'
+                'predictor': 'Real-time Analytics',
+                'auditlog': 'Inference Audit Log'
             };
             document.getElementById('page-title').innerText = titles[tab];
+
+            if (tab === 'auditlog') fetchAuditLog();
+
         }
 
         // Handle form submit
