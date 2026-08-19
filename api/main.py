@@ -140,10 +140,14 @@ app.add_middleware(
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-# Serve the new premium frontend
+# Serve the new premium frontend and static assets
 frontend_path = BASE_DIR / "frontend"
 if frontend_path.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_path)), name="static")
+
+if REPORTS_DIR.exists():
+    app.mount("/reports", StaticFiles(directory=str(REPORTS_DIR)), name="reports")
+
 
 @app.get("/", include_in_schema=False)
 async def serve_frontend():

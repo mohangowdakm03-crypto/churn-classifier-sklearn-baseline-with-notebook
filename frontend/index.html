@@ -127,6 +127,10 @@
                     <i data-feather="grid" class="w-5 h-5"></i>
                     <span class="font-medium">Dashboard</span>
                 </a>
+                <a href="#" onclick="switchTab('intelligence')" id="nav-intelligence" class="nav-item flex items-center space-x-3 px-4 py-3 rounded-lg text-gray-400 hover:text-white transition-colors">
+                    <i data-feather="bar-chart-2" class="w-5 h-5"></i>
+                    <span class="font-medium">Model Intelligence</span>
+                </a>
                 <a href="#" onclick="switchTab('predictor')" id="nav-predictor" class="nav-item flex items-center space-x-3 px-4 py-3 rounded-lg text-gray-400 hover:text-white transition-colors">
                     <i data-feather="cpu" class="w-5 h-5"></i>
                     <span class="font-medium">Live Predictor</span>
@@ -141,7 +145,7 @@
                     <span class="font-medium text-white">System Status</span>
                 </div>
                 API: Operational<br>
-                Model: Random Forest v1
+                Engine: <span id="sidebar-model-version">Loading...</span>
             </div>
         </div>
     </aside>
@@ -190,8 +194,8 @@
                             <i data-feather="check-circle" class="w-16 h-16 text-green-400"></i>
                         </div>
                         <h3 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-2">Model F1 Score</h3>
-                        <div class="text-4xl font-bold text-white mb-2">78.4%</div>
-                        <div class="text-sm text-green-400 flex items-center"><i data-feather="target" class="w-4 h-4 mr-1"></i> Exceeds 75% target</div>
+                        <div class="text-4xl font-bold text-white mb-2" id="dash-f1">--</div>
+                        <div class="text-sm text-green-400 flex items-center"><i data-feather="target" class="w-4 h-4 mr-1"></i> Active Champion</div>
                     </div>
                 </div>
 
@@ -203,9 +207,72 @@
                     <div>
                         <h2 class="text-xl font-bold text-white mb-2">Production Intelligence Ready</h2>
                         <p class="text-gray-400 leading-relaxed max-w-3xl">
-                            The ChurnGuard AI ensemble utilizes a tuned Random Forest algorithm optimized via Optuna Bayesian search. 
+                            The ChurnGuard AI ensemble utilizes a tuned machine learning algorithm optimized via Optuna Bayesian search. 
                             It processes 20+ features in real-time, handling categorical embeddings and standard scaling on the fly via our FastAPI microservice.
                         </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Model Intelligence Tab -->
+            <div id="tab-intelligence" class="hidden animate-fade-in">
+                <!-- Leaderboard -->
+                <div class="glass-panel rounded-2xl p-8 mb-8">
+                    <div class="flex items-center justify-between mb-6">
+                        <div>
+                            <h2 class="text-2xl font-bold text-white mb-1">Model Leaderboard</h2>
+                            <p class="text-gray-400 text-sm">Real-time performance comparison across tuned ensembles.</p>
+                        </div>
+                        <button onclick="fetchMetrics()" class="p-2 bg-white/5 hover:bg-white/10 rounded-lg transition text-gray-300">
+                            <i data-feather="refresh-cw" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm text-gray-300">
+                            <thead class="text-xs uppercase bg-white/5 text-gray-400 border-b border-white/10">
+                                <tr>
+                                    <th class="px-6 py-4 rounded-tl-lg">Algorithm</th>
+                                    <th class="px-6 py-4">Weighted F1</th>
+                                    <th class="px-6 py-4">ROC-AUC</th>
+                                    <th class="px-6 py-4 rounded-tr-lg">Train Time</th>
+                                </tr>
+                            </thead>
+                            <tbody id="leaderboard-body" class="divide-y divide-white/5">
+                                <tr><td colspan="4" class="px-6 py-4 text-center text-gray-500">Loading metrics...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Plots -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                    <div class="glass-panel rounded-2xl p-8">
+                        <h3 class="text-lg font-bold text-white mb-4">SHAP Feature Impact</h3>
+                        <p class="text-gray-400 text-sm mb-4">Global impact of each feature on predicting customer churn.</p>
+                        <div class="bg-white rounded-lg p-2 overflow-hidden flex justify-center">
+                            <img src="/reports/shap_bar.png" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMjAwIj48dGV4dCB4PSI1MCUiIHk9IjUwJSIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+Tm8gaW1hZ2U8L3RleHQ+PC9zdmc+'" class="max-w-full h-auto object-contain max-h-[300px] filter invert hue-rotate-180" alt="SHAP Bar">
+                        </div>
+                    </div>
+                    <div class="glass-panel rounded-2xl p-8">
+                        <h3 class="text-lg font-bold text-white mb-4">ROC Curve</h3>
+                        <p class="text-gray-400 text-sm mb-4">Trade-off between true positive rate and false positive rate.</p>
+                        <div class="bg-white rounded-lg p-2 overflow-hidden flex justify-center">
+                            <img src="/reports/roc_curve.png" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMjAwIj48dGV4dCB4PSI1MCUiIHk9IjUwJSIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+Tm8gaW1hZ2U8L3RleHQ+PC9zdmc+'" class="max-w-full h-auto object-contain max-h-[300px] filter invert hue-rotate-180" alt="ROC Curve">
+                        </div>
+                    </div>
+                    <div class="glass-panel rounded-2xl p-8">
+                        <h3 class="text-lg font-bold text-white mb-4">Confusion Matrix</h3>
+                        <p class="text-gray-400 text-sm mb-4">Actual vs Predicted classification results on the test set.</p>
+                        <div class="bg-white rounded-lg p-2 overflow-hidden flex justify-center">
+                            <img src="/reports/confusion_matrix.png" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMjAwIj48dGV4dCB4PSI1MCUiIHk9IjUwJSIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+Tm8gaW1hZ2U8L3RleHQ+PC9zdmc+'" class="max-w-full h-auto object-contain max-h-[300px] filter invert hue-rotate-180" alt="Confusion Matrix">
+                        </div>
+                    </div>
+                    <div class="glass-panel rounded-2xl p-8">
+                        <h3 class="text-lg font-bold text-white mb-4">Precision-Recall Curve</h3>
+                        <p class="text-gray-400 text-sm mb-4">Evaluates model performance on the imbalanced dataset.</p>
+                        <div class="bg-white rounded-lg p-2 overflow-hidden flex justify-center">
+                            <img src="/reports/pr_curve.png" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMjAwIj48dGV4dCB4PSI1MCUiIHk9IjUwJSIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+Tm8gaW1hZ2U8L3RleHQ+PC9zdmc+'" class="max-w-full h-auto object-contain max-h-[300px] filter invert hue-rotate-180" alt="PR Curve">
+                        </div>
                     </div>
                 </div>
             </div>
@@ -323,18 +390,72 @@
     <script>
         // Init icons
         feather.replace();
+        
+        const baseUrl = window.location.origin.includes('8000') ? window.location.origin : 'http://localhost:8000';
+
+        // Fetch metrics & results
+        async function fetchMetrics() {
+            try {
+                // Dashboard single metric
+                const metRes = await fetch(`${baseUrl}/metrics`);
+                const metData = await metRes.json();
+                document.getElementById('dash-f1').innerText = (metData.f1 * 100).toFixed(1) + '%';
+                
+                // Leaderboard
+                const resRes = await fetch(`${baseUrl}/results`);
+                let resData = await resRes.json();
+                
+                // Sort by F1 descending
+                resData.sort((a, b) => b.f1 - a.f1);
+                
+                document.getElementById('sidebar-model-version').innerText = resData[0].model.replace('_', ' ').toUpperCase();
+                
+                const tbody = document.getElementById('leaderboard-body');
+                tbody.innerHTML = '';
+                
+                resData.forEach((row, index) => {
+                    const isWinner = index === 0;
+                    const tr = document.createElement('tr');
+                    tr.className = isWinner ? 'bg-brand-500/10' : 'hover:bg-white/5';
+                    tr.innerHTML = `
+                        <td class="px-6 py-4 font-medium ${isWinner ? 'text-brand-400' : 'text-white'}">
+                            ${isWinner ? '<i data-feather="award" class="inline w-4 h-4 mr-1"></i> ' : ''}
+                            ${row.model.replace('_', ' ').toUpperCase()}
+                        </td>
+                        <td class="px-6 py-4">${row.f1.toFixed(4)}</td>
+                        <td class="px-6 py-4">${row.roc_auc.toFixed(4)}</td>
+                        <td class="px-6 py-4">${row.train_time_sec.toFixed(1)}s</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+                feather.replace();
+            } catch (err) {
+                console.error("Could not fetch metrics", err);
+            }
+        }
+        
+        // Load metrics on startup
+        fetchMetrics();
 
         // Tab switching logic
         function switchTab(tab) {
             document.getElementById('tab-dashboard').classList.add('hidden');
+            document.getElementById('tab-intelligence').classList.add('hidden');
             document.getElementById('tab-predictor').classList.add('hidden');
+            
             document.getElementById('nav-dashboard').classList.remove('active');
+            document.getElementById('nav-intelligence').classList.remove('active');
             document.getElementById('nav-predictor').classList.remove('active');
             
             document.getElementById('tab-' + tab).classList.remove('hidden');
             document.getElementById('nav-' + tab).classList.add('active');
             
-            document.getElementById('page-title').innerText = tab === 'dashboard' ? 'Platform Overview' : 'Real-time Analytics';
+            let titles = {
+                'dashboard': 'Platform Overview',
+                'intelligence': 'Model Intelligence & Explainability',
+                'predictor': 'Real-time Analytics'
+            };
+            document.getElementById('page-title').innerText = titles[tab];
         }
 
         // Handle form submit
@@ -370,8 +491,6 @@
             };
 
             try {
-                // Determine base URL dynamically (works locally or in production)
-                const baseUrl = window.location.origin.includes('8000') ? window.location.origin : 'http://localhost:8000';
                 const response = await fetch(`${baseUrl}/predict`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
